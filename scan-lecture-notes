@@ -1,0 +1,265 @@
+#!/usr/bin/python
+
+import argparse, re
+from html.parser import HTMLParser
+from operator import itemgetter
+from collections import defaultdict
+
+# Easy colors (print)
+class col:
+  BLN = '\033[0m'    # Blank
+  UND = '\033[1;4m'  # Underlined
+  INV = '\033[1;7m'  # Inverted
+  CRT = '\033[1;41m' # Critical
+  BLK = '\033[1;30m' # Black
+  RED = '\033[1;31m' # Red
+  GRN = '\033[1;32m' # Green
+  YLW = '\033[1;33m' # Yellow
+  BLU = '\033[1;34m' # Blue
+  MGN = '\033[1;35m' # Magenta
+  CYN = '\033[1;36m' # Cyan
+  WHT = '\033[1;37m' # White
+
+# Useful printing codes (long)
+def inptp(s):
+  return input(col.WHT+"["+col.BLU+"input"+col.WHT+"] "+str(s)+col.BLN)
+def infop(s):
+    print(col.WHT+"["+col.GRN+" info"+col.WHT+"] "+col.BLN+str(s))
+def logfp(s,logf=None):
+    print(col.WHT+"["+col.MGN+"  log"+col.WHT+"] "+col.BLN+str(s))
+    if logf is not None: logf.write(str(s)+"\n")
+def dbugp(s):
+  if _debug:
+    print(col.WHT+"["+col.BLK+"debug"+col.WHT+"] "+col.BLN+str(s))
+def warnp(s):
+    print(col.WHT+"["+col.YLW+" warn"+col.WHT+"] "+col.BLN+str(s))
+def erorp(s):
+    sys.stderr.write(col.WHT+"["+col.RED+"error"+col.WHT+"] "+col.BLN+str(s)+"\n")
+def sendp(s):
+    print(col.WHT+"["+col.CYN+" send"+col.WHT+"] "+s+col.BLN)
+def recvp(s):
+    print(col.WHT+"["+col.CYN+" recv"+col.WHT+"] "+s+col.BLN)
+
+def parseCommandLine():
+  parser = argparse.ArgumentParser()
+
+  parser.add_argument('input', metavar='filename', type=str,
+        help='input file name')
+
+  return parser.parse_args()
+
+def parseOneHtmlSlide(ss):
+  p = MyHTMLParser()
+  p.feed(ss)
+  return p.slideInfo
+
+def slidesAreTheSame(newslide,oldslide):
+  if len(newslide["lines"]) != len(oldslide["lines"]):
+    return False
+  for i in range(len(newslide["lines"])):
+    if newslide["lines"][i]["text"] == oldslide["lines"][i]["text"]:
+      continue
+    return False
+  return True
+
+def parseAllHtmlSlides(ss):
+  pagefinder = re.compile(r'''\<html.*?\>(.*?)\<\/html\>''',re.MULTILINE + re.DOTALL)
+  # pagefinder = re.compile(r'''\<html.*?\>(.*)''',re.MULTILINE or re.DOTALL)
+  allslides = []
+  for i,page in enumerate(pagefinder.finditer(ss)):
+    print("{0}Slide {1}{2}".format(col.GRN,i+1,col.BLN))
+    slide = parseOneHtmlSlide(page.group(1))
+    # print("{0}{1}{2}".format(col.CYN,slide,col.BLN))
+    if len(allslides) == 0:
+      allslides.append(slide)
+      continue
+    if slidesAreTheSame(slide,allslides[-1]):
+      print("FOUND DUPLICATE SLIDE!")
+      allslides[-1] = slide #Replace last slide
+    else:
+      allslides.append(slide)
+  return allslides
+
+class MyHTMLParser(HTMLParser):
+  def __init__(self):
+    HTMLParser.__init__(self)
+
+    self.ignorableTags = ["br","meta","img","title"]
+    # self.ignorableTags = []
+    self.stylefinder = re.compile(r'''.*?\{.*?\}''',re.MULTILINE + re.DOTALL)
+
+    self.ignoring           = False
+
+    self.parsingStyling     = False
+    self.parsingPara        = False
+
+    self.slideInfo          = {}
+    self.slideInfo["lines"] = []
+
+    self.stylingInfo        = {}
+
+    self.currentStyling     = {}
+    self.currentText        = ""
+
+
+  def parseStylingInfo(self,ss):
+    ss = re.sub(r'''\<\!\-\-''',r'''''',ss,re.MULTILINE + re.DOTALL)
+    # print("STYLING     :", ss)
+    for styleEntry in self.stylefinder.finditer(ss):
+      styleLine = styleEntry.group(0).strip()
+      # print(styleLine)
+      classname = styleLine.split("{")[0].strip()
+      # print(classname)
+      self.stylingInfo[classname] = {}
+      for item in styleLine.split("{")[1].split("}")[0].split(";"):
+        ituple = tuple(item.split(":"))
+        if len(ituple) != 2:
+          continue
+        key,val = ituple
+        self.stylingInfo[classname][key] = val
+    # print(self.stylingInfo)
+
+  def handle_starttag(self, tag, attrs):
+      if tag in self.ignorableTags:
+        self.ignoring += 1
+      if self.ignoring > 0:
+        return
+      elif tag == "style":
+        self.parsingStyling = True
+        print("{0}{1}{2}".format(col.RED,"STYLE",col.BLN))
+      elif tag == "p":
+        self.parsingPara    = True
+        print("{0}{1}{2}".format(col.RED,"PARA",col.BLN))
+
+        self.currentStyling = {}
+        self.currentText    = ""
+
+        sattrs = sorted(attrs,key=itemgetter(0)) #Make sure class is obtained before style
+        for attr in sattrs:
+          if attr[0] == "class":
+            elemclass = "."+attr[1]
+            if elemclass in self.stylingInfo:
+              for item in self.stylingInfo[elemclass].keys():
+                self.currentStyling[item] = self.stylingInfo[elemclass][item]
+          elif attr[0] == "style":
+            for style in attr[1].split(";"):
+              try:
+                key,val = tuple(style.split(":"))
+                self.currentStyling[key] = val
+              except:
+                continue
+
+        # print(self.currentStyling)
+
+      else:
+        print("Start tag:", tag)
+        for attr in attrs:
+            print("     attr:", attr)
+
+  def handle_endtag(self, tag):
+      if tag in self.ignorableTags:
+        self.ignoring -= 1
+        return
+      if tag == "style":
+        print("{0}{1}{2}".format(col.RED,"ENDSTYLE",col.BLN))
+        self.parsingStyling = False
+      elif tag == "p":
+        if self.currentText != "":
+          self.currentText = self.currentText.replace("\xa0", " ").strip() #Replace &nbsp;
+          print("  {0}{1}{2}".format(col.MGN,self.currentStyling,col.BLN))
+          print("  {0}{1}{2}".format(col.YLW,self.currentText,col.BLN))
+          self.slideInfo["lines"].append({
+            "text"    : self.currentText,
+            "styling" : self.currentStyling,
+            })
+        print("{0}{1}{2}".format(col.RED,"ENDPARA",col.BLN))
+        self.parsingPara    = False
+      else:
+        print("End tag  :", tag)
+
+  def handle_data(self, data):
+    if self.ignoring > 0:
+      return
+    if re.match(r'''[^\w]*$''',data):
+      return
+    if self.parsingStyling:
+      self.parseStylingInfo(data)
+    elif self.parsingPara:
+      self.currentText = self.currentText+" "+data
+    else:
+      return
+
+  def handle_comment(self, data):
+    if self.ignoring > 0:
+      return
+    print("Comment  :", data)
+
+  def handle_entityref(self, name):
+    if self.ignoring > 0:
+      return
+    c = chr(name2codepoint[name])
+    print("Named ent:", c)
+
+  def handle_charref(self, name):
+    if self.ignoring > 0:
+      return
+    if name.startswith('x'):
+        c = chr(int(name[1:], 16))
+    else:
+        c = chr(int(name))
+    print("Num ent  :", c)
+
+  def handle_decl(self, data):
+    if self.ignoring > 0:
+      return
+    print("Decl     :", data)
+
+def processSlides(slides):
+  stats          = {}
+  stats["firstline"] = {}
+  stats["alllines"] = {}
+  for pagenum,slide in enumerate(slides):
+    firstline = True
+    # print("{}{}{}".format(col.GRN,pagenum,col.BLN))
+    for line in slide["lines"]:
+      for key in line["styling"].keys():
+        val = line["styling"][key]
+        if not key in stats["alllines"]:
+          stats["alllines"][key] = defaultdict(int)
+        stats["alllines"][key][val] += 1
+
+        if firstline:
+          if not key in stats["firstline"]:
+            stats["firstline"][key] = defaultdict(int)
+          stats["firstline"][key][val] += 1
+        # print("  {}".format(line["styling"]))
+      firstline = False
+
+  for field in stats:
+    print("{}{}{}".format(col.GRN,field,col.BLN))
+    for key in stats[field]:
+      print("  {}".format(key))
+      for val in [item[0] for item in sorted(stats[field][key].items(),key=itemgetter(1),reverse=True)]:
+        print("    {}{}: {}".format(val," "*(20-len(val)),stats[field][key][val]))
+
+  headerrow = sorted(stats["firstline"]["top"].items(),key=itemgetter(1),reverse=True)[0]
+  print("{}{}: {}{}".format(col.CYN,"Most likely header row:",headerrow,col.BLN))
+
+def main():
+  args = parseCommandLine()
+  infile = args.input
+  with open(infile,"r") as fin:
+    indata = fin.read()
+  allslides = parseAllHtmlSlides(indata)
+  print()
+  processSlides(allslides)
+  print()
+  # for t in allslides:
+  #   print(t)
+  #   break
+  # print('\n'.join([t['lines'][i]['text'] for t in allslides for i in range(len(t['lines']))]))
+  # print([t[i]['text'] for t in allslides for i in t])
+  # print("Total: {0} slides".format(len(allslides)))
+
+if __name__ == "__main__":
+  main()

@@ -1,0 +1,23 @@
+#!/bin/bash
+#Script for converting lecture note PDFs to HTMLs
+# Requires: pdftohtml
+
+[ $# -lt 1 ] && "No input PDF specified"
+
+bname="$(basename "$1")"
+filename="${bname%.*}"
+
+infile="$(cd "$(dirname "$1")"; pwd)/$bname"
+indir="slides-$filename"
+
+olddir="$(pwd)"
+rm -f "$indir"
+mkdir -p "$indir"
+cd "$indir"
+
+pdftohtml -s "$infile" "$filename.html"
+rm "$filename"*.png
+mv "$filename-html.html" "$olddir/$filename.html"
+cd "$olddir"
+rm -rf "$indir"
+firefox "file://$olddir/$filename.html"
